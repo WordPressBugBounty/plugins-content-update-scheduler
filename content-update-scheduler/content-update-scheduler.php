@@ -7,7 +7,7 @@
  * Description: Schedule content updates for any page or post type.
  * Author: Infinitnet
  * Author URI: https://infinitnet.io/
- * Version: 2.3.3
+ * Version: 2.3.4
  * License: GPLv3
  * Text Domain: content-update-scheduler
  *
@@ -226,18 +226,37 @@ class ContentUpdateScheduler
         self::$_cus_publish_metabox = __('Scheduled Content Update', 'cus-scheduleupdate-td');
         self::register_post_status();
 
+        // Get all public post types plus 'product' (maintaining existing behavior)
         $post_types = array_merge(
             get_post_types(array('public' => true), 'names'), 
             array('product')
         );
-        
+
+        /**
+         * Filter to exclude specific post types from content update scheduling
+         * 
+         * @param array $excluded_post_types Array of post type names to exclude
+         * @return array Modified array of post type names to exclude
+         */
+        $excluded_post_types = apply_filters('content_update_scheduler_excluded_post_types', array());
+
+        // Ensure excluded_post_types is an array
+        $excluded_post_types = is_array($excluded_post_types) ? $excluded_post_types : array();
+
+        // Remove excluded post types
+        $post_types = array_diff($post_types, $excluded_post_types);
+
+        // Remove duplicates and ensure valid post types
+        $post_types = array_unique($post_types);
         foreach ($post_types as $post_type) {
-            add_filter('manage_edit-' . $post_type . '_columns', array( 'ContentUpdateScheduler', 'manage_pages_columns' ));
-            add_action('manage_' . $post_type . '_posts_custom_column', array( 'ContentUpdateScheduler', 'manage_pages_custom_column' ), 10, 2);
-            add_action('add_meta_boxes', array( 'ContentUpdateScheduler', 'add_meta_boxes_page' ), 10, 2);
+            if (post_type_exists($post_type)) {
+                add_filter('manage_edit-' . $post_type . '_columns', array( 'ContentUpdateScheduler', 'manage_pages_columns' ));
+                add_action('manage_' . $post_type . '_posts_custom_column', array( 'ContentUpdateScheduler', 'manage_pages_custom_column' ), 10, 2);
+                add_action('add_meta_boxes', array( 'ContentUpdateScheduler', 'add_meta_boxes_page' ), 10, 2);
+            }
         }
 
-        // Specific filter for WooCommerce products
+        // Specific filter for WooCommerce products (maintaining existing behavior)
         add_filter('manage_edit-product_columns', array( 'ContentUpdateScheduler', 'manage_pages_columns' ));
         add_action('manage_product_posts_custom_column', array( 'ContentUpdateScheduler', 'manage_pages_custom_column' ), 10, 2);
 
@@ -588,6 +607,18 @@ class ContentUpdateScheduler
                     ?>
                 </div>
             </p>
+            <div class="misc-pub-section">
+                <label>
+                    <input type="checkbox" 
+                           name="<?php echo esc_attr(self::$_cus_publish_status); ?>_keep_dates" 
+                           id="<?php echo esc_attr(self::$_cus_publish_status); ?>_keep_dates"
+                           <?php checked(get_post_meta($post->ID, self::$_cus_publish_status . '_keep_dates', true), 'yes'); ?>>
+                    <?php esc_html_e('Keep original publication date', 'cus-scheduleupdate-td'); ?>
+                </label>
+                <p class="description">
+                    <?php esc_html_e('If checked, the original publication date will be preserved when this update is published.', 'cus-scheduleupdate-td'); ?>
+                </p>
+            </div>
         </div>
         <script type="text/javascript">
         function initContentUpdateScheduler() {
@@ -779,6 +810,9 @@ class ContentUpdateScheduler
 
         // and finally referencing the original post.
         update_post_meta($new_post_id, self::$_cus_publish_status . '_original', $original);
+        
+        // Ensure the keep_dates setting is not copied from previous scheduled updates
+        delete_post_meta($new_post_id, self::$_cus_publish_status . '_keep_dates');
 
         // Handle WooCommerce products
         if (class_exists('WooCommerce') && $post->post_type === 'product') {
@@ -971,6 +1005,14 @@ class ContentUpdateScheduler
                     error_log("Successfully scheduled event for timestamp: $stamp");
                 }
                 
+                // Save keep_dates preference
+                $keep_dates_key = self::$_cus_publish_status . '_keep_dates';
+                if (isset($_POST[$keep_dates_key])) {
+                    update_post_meta($post_id, $keep_dates_key, 'yes');
+                } else {
+                    delete_post_meta($post_id, $keep_dates_key);
+                }
+
                 // Verify the event was scheduled
                 $next_scheduled = wp_next_scheduled('cus_publish_post', array($post_id));
                 if ($next_scheduled === false) {
@@ -1084,19 +1126,33 @@ class ContentUpdateScheduler
             $post->guid = $orig->guid;
             $post->post_parent = $orig->post_parent;
             $post->post_status = $orig->post_status;
-            $post_date = wp_date('Y-m-d H:i:s');
+            
+            $keep_dates = get_post_meta($post_id, self::$_cus_publish_status . '_keep_dates', true) === 'yes';
 
-            /**
-             * Filter the new posts' post date
-             *
-             * @param string  $post_date the date to be used, must be in the form of `Y-m-d H:i:s`.
-             * @param WP_Post $post      the scheduled update post.
-             * @param WP_Post $orig      the original post.
-             */
-            $post_date = apply_filters('ContentUpdateScheduler\\publish_post_date', $post_date, $post, $orig);
+            if ($keep_dates) {
+                // Keep original dates but update modified date
+                $post->post_date = $orig->post_date;
+                $post->post_date_gmt = $orig->post_date_gmt;
+                $post->post_modified = wp_date('Y-m-d H:i:s');
+                $post->post_modified_gmt = get_gmt_from_date($post->post_modified);
+            } else {
+                // Use new dates
+                $post_date = wp_date('Y-m-d H:i:s');
+                
+                /**
+                 * Filter the new posts' post date
+                 *
+                 * @param string  $post_date the date to be used, must be in the form of `Y-m-d H:i:s`.
+                 * @param WP_Post $post      the scheduled update post.
+                 * @param WP_Post $orig      the original post.
+                 */
+                $post_date = apply_filters('ContentUpdateScheduler\\publish_post_date', $post_date, $post, $orig);
 
-            $post->post_date = $post_date;
-            $post->post_date_gmt = get_gmt_from_date($post_date);
+                $post->post_date = $post_date;
+                $post->post_date_gmt = get_gmt_from_date($post_date);
+                $post->post_modified = $post_date;
+                $post->post_modified_gmt = $post->post_date_gmt;
+            }
 
             delete_post_meta($orig->ID, self::$_cus_publish_status . '_pubdate');
 
