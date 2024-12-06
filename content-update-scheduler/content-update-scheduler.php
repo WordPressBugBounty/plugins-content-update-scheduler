@@ -7,7 +7,7 @@
  * Description: Schedule content updates for any page or post type.
  * Author: Infinitnet
  * Author URI: https://infinitnet.io/
- * Version: 2.3.4
+ * Version: 2.3.5
  * License: GPLv3
  * Text Domain: content-update-scheduler
  *
@@ -87,40 +87,207 @@ class ContentUpdateScheduler
     }
 
     /**
-     * Handles the CSS copying for Elementor and Oxygen plugins.
-     *
-     * @param int $source_post_id The source post ID.
-     * @param int $destination_post_id The destination post ID.
-     *
-     * @return void
+     * Copies Elementor-specific data between posts
+     * 
+     * @param int $source_id Source post ID
+     * @param int $destination_id Destination post ID
+     * @return bool Success status
      */
-    private static function handle_plugin_css_copy($source_post_id, $destination_post_id)
-    {
-        // Elementor plugin active.
-        if (in_array('elementor/elementor.php', apply_filters('active_plugins', get_option('active_plugins')))) {
-            $upload_dir = wp_upload_dir();
-            $source_css = $upload_dir['basedir'] . '/elementor/css/post-' . $source_post_id . '.css';
-            $destination_css = $upload_dir['basedir'] . '/elementor/css/post-' . $destination_post_id . '.css';
-
-            if (file_exists($source_css)) {
-                copy($source_css, $destination_css);
-            }
-
+    private static function copy_elementor_data($source_id, $destination_id) {
+        // Early exit if Elementor isn't active
+        if (!defined('ELEMENTOR_VERSION')) {
+            return false;
         }
 
-        // Oxygen plugin active.
-        if (in_array('oxygen/functions.php', apply_filters('active_plugins', get_option('active_plugins')))) {
-            $upload_dir = wp_upload_dir();
-            $dir = $upload_dir['basedir'] . '/oxygen/css/' . get_post_field('post_name', $source_post_id) . '-' . $source_post_id . '.css';
-            $chdir = $upload_dir['basedir'] . '/oxygen/css/' . get_post_field('post_name', $destination_post_id) . '-' . $destination_post_id . '.css';
+        try {
+            // Core Elementor meta keys that must be preserved
+            $elementor_meta_keys = [
+                '_elementor_data',
+                '_elementor_edit_mode', 
+                '_elementor_page_settings',
+                '_elementor_version',
+                '_elementor_template_type',
+                '_elementor_controls_usage'
+            ];
 
-            if (!file_exists($chdir)) {
-                fopen($chdir, "w");
+            // Get all meta at once for efficiency
+            $source_meta = get_post_meta($source_id);
+            
+            foreach ($elementor_meta_keys as $key) {
+                if (!isset($source_meta[$key][0])) {
+                    continue;
+                }
+
+                $value = $source_meta[$key][0];
+                
+                // Special handling for Elementor's JSON data
+                if ($key === '_elementor_data') {
+                    // Ensure valid JSON 
+                    $decoded = json_decode($value);
+                    if (json_last_error() === JSON_ERROR_NONE) {
+                        // Preserve exact JSON structure with proper slashing
+                        update_post_meta($destination_id, $key, wp_slash($value));
+                    } else {
+                        error_log(sprintf(
+                            'Content Update Scheduler: Invalid Elementor JSON in post %d',
+                            $source_id
+                        ));
+                    }
+                    continue;
+                }
+
+                // Copy other Elementor meta directly
+                update_post_meta($destination_id, $key, maybe_unserialize($value));
             }
-            if (!file_exists($dir)) {
-                fopen($dir, "w");
+
+            // Copy Elementor CSS file
+            $upload_dir = wp_upload_dir();
+            $source_css = $upload_dir['basedir'] . '/elementor/css/post-' . $source_id . '.css';
+            $dest_css = $upload_dir['basedir'] . '/elementor/css/post-' . $destination_id . '.css';
+            
+            if (file_exists($source_css)) {
+                @copy($source_css, $dest_css);
             }
-            copy($dir, $chdir);
+
+            return true;
+
+        } catch (Exception $e) {
+            error_log(sprintf(
+                'Content Update Scheduler: Error copying Elementor data: %s',
+                $e->getMessage()
+            ));
+            return false;
+        }
+    }
+
+    /**
+     * Handles the Oxygen builder CSS copying
+     *
+     * @param int $source_id Source post ID
+     * @param int $destination_id Destination post ID
+     * @return bool Success status
+     */
+    private static function handle_wpml_relationships($source_id, $destination_id, $is_publishing = false) {
+        // Early exit if WPML isn't active
+        if (!defined('ICL_SITEPRESS_VERSION')) {
+            return false;
+        }
+
+        try {
+            // Basic validation
+            $post_type = get_post_type($source_id);
+            if (!$post_type || $post_type !== get_post_type($destination_id)) {
+                return false;
+            }
+
+            $element_type = 'post_' . $post_type;
+
+            // Get source language details
+            $source_details = apply_filters('wpml_element_language_details', null, array(
+                'element_id' => $source_id,
+                'element_type' => $element_type
+            ));
+
+            if (!$source_details) {
+                return false;
+            }
+
+            /**
+             * Filter whether to create new translation group
+             * 
+             * @param bool $create_new_group Whether to create new translation group
+             * @param int $source_id Source post ID
+             * @param int $destination_id Destination post ID
+             * @param bool $is_publishing Whether this is a publish operation
+             */
+            $create_new_group = apply_filters(
+                'content_update_scheduler_wpml_new_translation_group',
+                !$is_publishing,
+                $source_id,
+                $destination_id,
+                $is_publishing
+            );
+
+            // Set language details
+            do_action('wpml_set_element_language_details', array(
+                'element_id' => $destination_id,
+                'element_type' => $element_type,
+                'trid' => $create_new_group ? null : apply_filters('wpml_element_trid', null, $source_id, $element_type),
+                'language_code' => $source_details->language_code,
+                'source_language_code' => $source_details->source_language_code
+            ));
+
+            // Copy essential WPML meta
+            $wpml_meta_keys = array(
+                '_wpml_media_featured',
+                '_wpml_media_duplicate',
+                '_wpml_media_processed'
+            );
+
+            foreach ($wpml_meta_keys as $meta_key) {
+                $value = get_post_meta($source_id, $meta_key, true);
+                if ($value !== '') {
+                    update_post_meta($destination_id, $meta_key, $value);
+                }
+            }
+
+            /**
+             * Fires after WPML relationships have been handled
+             * 
+             * @param int $source_id Source post ID
+             * @param int $destination_id Destination post ID
+             * @param bool $is_publishing Whether this is a publish operation
+             */
+            do_action('content_update_scheduler_after_wpml_handling', 
+                $source_id, 
+                $destination_id, 
+                $is_publishing
+            );
+
+            return true;
+
+        } catch (Exception $e) {
+            error_log(sprintf(
+                'Content Update Scheduler: WPML handling error for posts %d->%d: %s',
+                $source_id,
+                $destination_id,
+                $e->getMessage()
+            ));
+            return false;
+        }
+    }
+
+    private static function copy_oxygen_data($source_id, $destination_id) {
+        // Early exit if Oxygen isn't active
+        if (!in_array('oxygen/functions.php', apply_filters('active_plugins', get_option('active_plugins')))) {
+            return false;
+        }
+
+        try {
+            $upload_dir = wp_upload_dir();
+            $source_css = $upload_dir['basedir'] . '/oxygen/css/' . 
+                         get_post_field('post_name', $source_id) . '-' . $source_id . '.css';
+            $dest_css = $upload_dir['basedir'] . '/oxygen/css/' . 
+                       get_post_field('post_name', $destination_id) . '-' . $destination_id . '.css';
+
+            // Create destination file if it doesn't exist
+            if (!file_exists($dest_css)) {
+                @touch($dest_css);
+            }
+
+            // Copy CSS if source exists
+            if (file_exists($source_css)) {
+                @copy($source_css, $dest_css);
+            }
+
+            return true;
+
+        } catch (Exception $e) {
+            error_log(sprintf(
+                'Content Update Scheduler: Error copying Oxygen data: %s',
+                $e->getMessage()
+            ));
+            return false;
         }
     }
 
@@ -803,7 +970,9 @@ class ContentUpdateScheduler
             return $new_post_id;
         }
 
-        self::handle_plugin_css_copy($post->ID, $new_post_id);
+        self::copy_elementor_data($post->ID, $new_post_id);
+        self::copy_oxygen_data($post->ID, $new_post_id);
+        self::handle_wpml_relationships($post->ID, $new_post_id);
 
         // copy meta and terms over to the new post.
         self::copy_meta_and_terms($post->ID, $new_post_id);
@@ -885,51 +1054,72 @@ class ContentUpdateScheduler
         return $value;
     }
 
-    public static function copy_meta_and_terms($source_post_id, $destination_post_id, $restore_references = false)
+    /**
+     * Copies meta and terms from one post to another
+     *
+     * @param int  $source_post_id      The post from which to copy.
+     * @param int  $destination_post_id The post which will get the meta and terms.
+     * @param bool $restore_references  Whether to restore references to the original post ID.
+     *
+     * @return void
+     */
+    private static function copy_meta_and_terms($source_post_id, $destination_post_id, $restore_references = false) 
     {
         $source_post = get_post($source_post_id);
         $destination_post = get_post($destination_post_id);
 
-        // abort if any of the ids is not a post.
-        if (! $source_post || ! $destination_post) {
+        // Abort if any of the ids is not a post.
+        if (!$source_post || !$destination_post) {
             return;
         }
 
-        // Copy meta
-        $meta = get_post_meta($source_post->ID);
-        foreach ($meta as $key => $values) {
-            delete_post_meta($destination_post->ID, $key);
-            foreach ($values as $value) {
-                $processed_value = self::copy_meta_value($value);
-                
-                if ($restore_references && is_string($processed_value) && 
-                    strpos($processed_value, (string)$source_post->ID) !== false) {
-                    $processed_value = str_replace(
-                        (string)$source_post->ID, 
-                        (string)$destination_post->ID, 
-                        $processed_value
-                    );
-                }
-                
-                add_post_meta($destination_post->ID, $key, $processed_value);
-            }
+        // Store current kses status and temporarily disable filters.
+        $should_filter = ! current_filter('content_save_pre');
+        if ($should_filter) {
+            remove_filter('content_save_pre', 'wp_filter_post_kses');
+            remove_filter('db_insert_value', 'wp_filter_kses');
         }
 
-
-        // and now for copying the terms.
-        $taxonomies = get_object_taxonomies($source_post->post_type);
-        foreach ($taxonomies as $taxonomy) {
-            $post_terms = wp_get_object_terms($source_post->ID, $taxonomy, array(
-                'orderby' => 'term_order',
-            ));
-            $terms = array();
-            foreach ($post_terms as $term) {
-                $terms[] = $term->slug;
+        try {
+            // Copy meta.
+            $meta = get_post_meta($source_post->ID);
+            foreach ($meta as $key => $values) {
+                delete_post_meta($destination_post->ID, $key);
+                foreach ($values as $value) {
+                    $processed_value = self::copy_meta_value($value);
+                    
+                    if ($restore_references && is_string($processed_value) && 
+                        strpos($processed_value, (string)$source_post->ID) !== false) {
+                        $processed_value = str_replace(
+                            (string)$source_post->ID, 
+                            (string)$destination_post->ID, 
+                            $processed_value
+                        );
+                    }
+                    
+                    add_post_meta($destination_post->ID, $key, $processed_value);
+                }
             }
-            // reset taxonomy to empty.
-            wp_set_object_terms($destination_post->ID, null, $taxonomy);
-            // then add new terms.
-            wp_set_object_terms($destination_post->ID, $terms, $taxonomy);
+
+            // Copy terms.
+            $taxonomies = get_object_taxonomies($source_post->post_type);
+            foreach ($taxonomies as $taxonomy) {
+                $post_terms = wp_get_object_terms($source_post->ID, $taxonomy, array(
+                    'orderby' => 'term_order',
+                ));
+                $terms = array();
+                foreach ($post_terms as $term) {
+                    $terms[] = $term->slug;
+                }
+                wp_set_object_terms($destination_post->ID, null, $taxonomy);
+                wp_set_object_terms($destination_post->ID, $terms, $taxonomy);
+            }
+        } finally {
+            // Restore filters if they were active.
+            if ($should_filter) {
+                add_filter('content_save_pre', 'wp_filter_post_kses');
+                add_filter('db_insert_value', 'wp_filter_kses');
+            }
         }
     }
 
@@ -1103,7 +1293,9 @@ class ContentUpdateScheduler
             $original_stock_status = get_post_meta($orig->ID, '_stock_status', true);
             $original_stock_quantity = get_post_meta($orig->ID, '_stock', true);
 
-            self::handle_plugin_css_copy($post->ID, $orig_id);
+            self::copy_elementor_data($post->ID, $orig_id);
+            self::copy_oxygen_data($post->ID, $orig_id);
+            self::handle_wpml_relationships($post->ID, $orig_id, true);
 
             /**
              * Fires before a scheduled post is being updated
