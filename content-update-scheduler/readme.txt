@@ -2,8 +2,8 @@
 Contributors: infinitnet
 Tags: schedule, scheduling, update, republish, publication
 Requires at least: 5.0
-Tested up to: 6.7.1
-Stable tag: 2.3.5
+Tested up to: 6.8
+Stable tag: 2.3.6
 Requires PHP: 7.4
 License: GPLv3
 License URI: https://www.gnu.org/licenses/gpl-3.0.en.html
@@ -61,6 +61,10 @@ add_filter('content_update_scheduler_excluded_post_types', function($excluded_po
 `
 
 == Changelog ==
+
+= 2.3.6 =
+* security: Fix user role publishing permissions
+* chore: Remove unused "No Date Set" setting
 
 = 2.3.5 =
 * refactor: Improve meta and terms copying with filter management and visibility
