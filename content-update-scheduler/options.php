@@ -6,6 +6,8 @@
  * @package cus
  */
 
+defined('ABSPATH') || exit;
+
 /**
  * CUS Schedule Update options class
  */
@@ -38,13 +40,13 @@ class ContentUpdateScheduler_Options
         add_settings_section(
             'tsu_section',
             '',
-            'intval',
+            '__return_false',
             'tsu'
         );
 
         add_settings_field(
             'tsu_field_visible',
-            __('Post Visibility', 'cus-scheduleupdate-td'),
+            __('Post Visibility', 'content-update-scheduler'),
             array( __CLASS__, 'field_visible_cb' ),
             'tsu',
             'tsu_section',
@@ -56,7 +58,7 @@ class ContentUpdateScheduler_Options
 
         add_settings_field(
             'tsu_field_recursive',
-            __('Recursive Scheduling', 'cus-scheduleupdate-td'),
+            __('Recursive Scheduling', 'content-update-scheduler'),
             array( __CLASS__, 'field_recursive_cb' ),
             'tsu',
             'tsu_section',
@@ -151,13 +153,12 @@ class ContentUpdateScheduler_Options
     private static function render_checkbox_field($args, $label)
     {
         $options = get_option('tsu_options');
-        $checked = isset($options[$args['label_for']]) ? 'checked="checked"' : '';
         ?>
         <label for="<?php echo esc_attr($args['label_for']); ?>">
             <input id="<?php echo esc_attr($args['label_for']); ?>"
                    type="checkbox"
                    name="tsu_options[<?php echo esc_attr($args['label_for']); ?>]"
-                   <?php echo $checked; // WPCS: XSS okay. ?>
+                   <?php checked(isset($options[$args['label_for']])); ?>
             >
             <?php echo esc_html($label); ?>
         </label>
@@ -173,7 +174,7 @@ class ContentUpdateScheduler_Options
      */
     public static function field_visible_cb($args)
     {
-        self::render_checkbox_field($args, __('Scheduled posts are visible for anonymous users in the frontend', 'cus-scheduleupdate-td'));
+        self::render_checkbox_field($args, __('Scheduled posts are visible for anonymous users in the frontend', 'content-update-scheduler'));
     }
 
     /**
@@ -185,7 +186,7 @@ class ContentUpdateScheduler_Options
      */
     public static function field_recursive_cb($args)
     {
-        self::render_checkbox_field($args, __('Allow recursive scheduling', 'cus-scheduleupdate-td'));
+        self::render_checkbox_field($args, __('Allow recursive scheduling', 'content-update-scheduler'));
     }
 
     /**

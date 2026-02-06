@@ -1,9 +1,9 @@
 === Content Update Scheduler ===
 Contributors: infinitnet
 Tags: schedule, scheduling, update, republish, publication
-Requires at least: 5.0
-Tested up to: 6.8
-Stable tag: 3.1.1
+Requires at least: 6.0
+Tested up to: 6.9
+Stable tag: 4.0.2
 Requires PHP: 7.4
 License: GPLv3
 License URI: https://www.gnu.org/licenses/gpl-3.0.en.html
@@ -85,6 +85,32 @@ add_action('ContentUpdateScheduler\\after_publish_post', function($post, $orig) 
 These hooks are useful for triggering custom notifications, cache clearing, analytics tracking, or any other post-publication tasks.
 
 == Changelog ==
+
+= 4.0.2 =
+* feat: Add overdue event recovery
+* fix: Capability checks with proper fallbacks when post type object is unavailable
+* fix: Enhanced meta cleanup to prevent schedule timestamp inheritance
+* fix: Improve scheduled homepage changes reliability and backwards compatibility
+* fix: Plugin Check errors resolved
+
+= 4.0.1 =
+* fix: Namespace issue
+* fix: Scheduled Republications table display
+
+= 4.0.0 =
+* refactor: Refactored and modernized entire codebase
+
+= 3.1.5 =
+* fix: Correct date selection offset calculation
+
+= 3.1.4 =
+* fix: Add time format validation and trim whitespace
+
+= 3.1.3 =
+* fix: Improve Elementor compatibility
+
+= 3.1.2 =
+* fix: Correct homepage dropdown filter implementation
 
 = 3.1.1 =
 * fix: Correct regex patterns for Unicode escape sequence protection
